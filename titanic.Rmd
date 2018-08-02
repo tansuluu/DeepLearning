@@ -1,0 +1,128 @@
+---
+title: "Titanic"
+author: "Tansuluu Myrzaeva"
+date: '28 июня 2018 г '
+output: html_document
+---
+
+```{r setup, include=FALSE}
+
+library(dplyr)
+library(ggplot2)
+library(Matrix)
+library(xgboost)
+library(rpart)
+library(randomForest)
+library(caret)
+library(missForest)
+
+```
+<h4><b>Задача</b>: Имея данные про выжавших в титанике, как качественные так и количественные с зависимой переменой Survived, предсказать выживит ли пассажир,с новыми данными, с помощью: </h4>
+<ul>
+<li><i>Linear regression</i></li>
+<li><i>RandomForest</i></li>
+<li><i>XGBoost</i></li>
+<li><i>Decisin tree</i></li>
+</ul>
+
+Сначала загрузим библиотеки и данные:
+
+```{r}
+library(dplyr)
+library(xgboost)
+library(missForest)
+library(caret)
+#Данные
+trainTitanic<-read.csv("C:/Users/acer/Downloads/train.csv")
+testTitanic<-read.csv("C:/Users/acer/Downloads/test.csv")
+```
+
+Проверяем данные на NA
+```{r warning=FALSE, results='hide'}
+#sapply(trainTitanic,function(x){sum(is.na(x))})
+#Удаляем ненужные данные
+trainTitanic$Ticket <- NULL
+trainTitanic$Cabin <- NULL
+trainTitanic$Name <- NULL
+
+testTitanic$Ticket <- NULL
+testTitanic$Cabin <- NULL
+testTitanic$Name <- NULL
+
+##Заполняем NA 
+miss<- missForest(trainTitanic)
+trainTitanic <- miss$ximp
+misst<- missForest(testTitanic)
+testTitanic <- misst$ximp
+
+sum(is.na(trainTitanic))
+sum(is.na(testTitanic))
+```
+
+Строим модели:
+```{r warning=FALSE, results='hide'}
+#Линейная регрессия
+model <- lm(Survived ~ ., trainTitanic)
+step(model,direction = "backward")
+model<-lm(formula = Survived ~ Pclass + Sex + Age + SibSp, data = trainTitanic)
+predicted <- predict(model, testTitanic)
+
+dataFrame <- cbind(PassengerId = testTitanic$PassengerId, Survived = ifelse(predicted>= 0.5, 1, 0))
+write.csv(dataFrame, "TitanicLm.csv", quote = F, row.names = F)
+
+#Дерево Решения
+decision_tree <- rpart(Survived ~ ., trainTitanic)
+predicted <- predict(decision_tree, testTitanic)
+
+dataFrame <- cbind(PassengerId = testTitanic$PassengerId, Survived = ifelse(predicted >= 0.5, 1, 0))
+write.csv(dataFrame, "DTitanic.csv", quote = F, row.names = F)
+
+#Случайный лес
+trainTitanic <- trainTitanic %>% mutate_if(is.factor, as.numeric)
+testTitanic <- testTitanic %>% mutate_if(is.factor, as.numeric)
+
+modelRF <- randomForest(Survived ~ .,trainTitanic,type = "classification",ntree = 500,do.trace = TRUE)
+
+
+
+predicted<- predict(modelRF, testTitanic, type = "class")
+
+dataFrame <- cbind(PassengerId = testTitanic$PassengerId, Survived = ifelse(predicted >= 0.5, 1, 0))
+write.csv(dataFrame, "TitanicRF.csv", quote = F, row.names = F)
+
+
+# XGBoost
+tr <- createDataPartition(trainTitanic$Survived, p = 0.7, list = FALSE)
+trainT <- trainTitanic[tr,]
+testT <- trainTitanic[-tr,]
+
+trainMatrix <- data.matrix(select(trainT, -Survived))
+testMatrix <- data.matrix(select(testT, -Survived))
+
+labelTrain <- trainT$Survived
+labelTest <- testT$Survived
+
+#Создаем матрицу
+matrix_train <- xgb.DMatrix(data = trainMatrix, label = labelTrain)
+matrix_test <- xgb.DMatrix(data = testMatrix, label = labelTest)
+watchlist <- list(train = matrix_train, test = matrix_test)
+bst <- xgb.train(data=matrix_train,
+                nround=1000,
+                maximize = FALSE,
+                early_stopping_rounds = 10,
+                watchlist = watchlist,
+                max_depth=7,
+                objective = "binary:logistic",
+                eval_metric = "rmse",
+                colsample_bytree=1,
+                subsample = 1
+                )
+
+test_matrix <- data.matrix(testTitanic)
+predicted<- predict(bst, test_matrix)
+
+# Пишем в файл
+dataFrame <- cbind(PassengerId = testTitanic$PassengerId, Survived = ifelse(predicted>= 0.5, 1, 0))
+write.csv(dataFrame, "TitanicXGB.csv", quote = F, row.names = F)
+```
+

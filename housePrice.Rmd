@@ -1,0 +1,149 @@
+---
+title: "House Price"
+author: "Tansuluu Myrzaeva"
+date: '28 июня 2018 г '
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(dplyr)
+library(xgboost)
+library(missForest)
+library(caret)
+
+```
+<h4><b>Задача</b>: Имея данные про дом, как качественные так и количественные с зависимой переменой SalePrice, предсказать цены домов с новыми данными, с помощью: </h4>
+<ul>
+<li><i>Linear regression</i></li>
+<li><i>RandomForest</i></li>
+<li><i>XGBoost</i></li>
+</ul>
+
+Сначала загрузим библиотеки и данные:
+
+```{r}
+library(dplyr)
+library(xgboost)
+library(missForest)
+library(caret)
+#Данные
+trainHouse<-read.csv("C:/Users/acer/Downloads/train (1).csv")
+testHouse<-read.csv("C:/Users/acer/Downloads/test (1).csv")
+
+```
+
+Проверяем данные на NA
+```{r results='hide', warning=FALSE}
+##sapply(trainHouse,function(x){sum(is.na(x))})
+
+##Удалаяем переменные где NA больше чем 60%
+cols <- sapply(trainHouse, function(x){sum(is.na(x)/nrow(trainHouse))})<=0.4
+trainHouse <- trainHouse[,cols]
+cols_test<- sapply(testHouse, function(x){sum(is.na(x)/nrow(testHouse))})<=0.4
+testHouse <- testHouse[,cols_test]
+
+##Заполняем NA 
+miss<- missForest(trainHouse)
+trainHouse <- miss$ximp
+misst<- missForest(testHouse)
+testHouse <- misst$ximp
+sum(is.na(trainHouse))
+sum(is.na(testHouse))
+
+#Проверяем на нормальное расспределение 
+#l<-lm(SalePrice~.,trainHouse)
+#shapiro.test(l$residuals )
+
+#for(i in 1:ncol(trainHouse)){
+#  for(k in 1:nrow(trainHouse)){
+#    if(is.numeric(trainHouse[[i]][k]) && abs(trainHouse[[i]][k])>0){
+#      trainHouse[[i]][k]<-log(abs(trainHouse[[i]][k]))
+#    }
+#  }
+#}
+#l<-lm(SalePrice~.,trainHouse)
+#shapiro.test(l$residuals )
+
+##Приводим к общему типу переменные
+
+trainHouse <- trainHouse %>% mutate_if(is.factor, as.numeric)
+trainHouse <- trainHouse %>% mutate_if(is.integer, as.numeric)
+testHouse <- testHouse %>% mutate_if(is.factor, as.numeric)
+testHouse <- testHouse %>% mutate_if(is.integer, as.numeric)
+
+```
+
+Строим модели: 
+```{r results='hide' ,warning=FALSE}
+# Линейная Регрессия
+model=lm(SalePrice~.,trainHouse)
+step(model,direction = "backward")
+model <- lm(formula = SalePrice ~ MSSubClass + LotFrontage + LotArea + 
+    Street + LotShape + LandContour + LandSlope + Neighborhood + 
+    Condition2 + BldgType + HouseStyle + OverallQual + OverallCond + 
+    YearBuilt + RoofStyle + RoofMatl + Exterior1st + MasVnrType + 
+    MasVnrArea + ExterQual + BsmtQual + BsmtCond + BsmtExposure + 
+    BsmtFinType1 + BsmtFinSF1 + X1stFlrSF + X2ndFlrSF + LowQualFinSF + 
+    BsmtFullBath + FullBath + BedroomAbvGr + KitchenAbvGr + KitchenQual + 
+    TotRmsAbvGrd + Functional + Fireplaces + GarageYrBlt + GarageCars + 
+    GarageCond + WoodDeckSF + ScreenPorch + YrSold + SaleCondition, 
+    data = trainHouse)
+#summary(model)
+predicted <- predict(model, testHouse)
+
+dataFrame <- data.frame(Id = testHouse$Id, SalePrice = predicted)
+write.csv(dataFrame, "housePrice1.csv", quote = F, row.names = F)
+
+
+# Случайный Лес
+
+modelRF<- randomForest(SalePrice ~ .,trainHouse,type = "regression",ntree =500,do.trace=TRUE)
+
+predictedRF <- predict(modelRF, testHouse)
+
+dataFrame<- data.frame(Id = testHouse$Id, SalePrice = predictedRF)
+write.csv(dataFrame, "HousePriceRF.csv", quote = F, row.names = F)
+
+# XGBoost
+# Делим данные для обучения и тестирования
+
+tr <- createDataPartition(trainHouse$Id, p = 0.7, list = FALSE)
+trainH <- trainHouse[tr,]
+testH <- trainHouse[-tr,]
+
+matrix_train <- data.matrix(select(trainH, -SalePrice))
+matrix_test <- data.matrix(select(testH, -SalePrice))
+
+
+labelTrain <- trainH$SalePrice
+labelTest <- testH$SalePrice
+
+#Собираем матрицу
+
+mat_train <- xgb.DMatrix(data = matrix_train, label = labelTrain)
+mat_test <- xgb.DMatrix(data = matrix_test, label = labelTest)
+
+watchlist <- list(train = mat_train, test = mat_test)
+
+# BOOSTING
+bst <- xgb.train(data=mat_train,
+                nround=500,
+                maximize = FALSE,
+                early_stopping_rounds = 10,
+                watchlist = watchlist,
+                max_depth=7,
+                objective = "reg:linear",
+                eval_metric = "rmse",
+                alpha=0.01,
+                lambda=0.01,
+                colsample_bytree=0.7,
+                subsample = 0.7
+                )
+
+
+matrix_testHouse <- data.matrix(testHouse)
+
+predictedXGB <- predict(bst, matrix_testHouse)
+dataFrame <- data.frame(Id = testHouse$Id, SalePrice = predictedXGB)
+write.csv(dataFrame, "housPriceXGB.csv", quote = F, row.names = F)
+```
