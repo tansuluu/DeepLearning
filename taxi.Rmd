@@ -1,0 +1,155 @@
+---
+title: "Taxi"
+author: "Tansuluu Myrzaeva"
+date: '28 июня 2018 г '
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(dplyr)
+library(xgboost)
+library(missForest)
+library(caret)
+
+```
+<h4><b>Задача</b>: Имея данные про проезд такси, как качественные так и количественные с зависимой переменой время занимаемое проезда, предсказать время занимаемое проезда, с новыми данными, с помощью: </h4>
+<ul>
+<li><i>Linear regression</i></li>
+<li><i>RandomForest</i></li>
+<li><i>XGBoost</i></li>
+</ul>
+
+Сначала загрузим библиотеки и данные:
+
+```{r}
+library(dplyr)
+library(xgboost)
+library(missForest)
+library(caret)
+#Данные
+train<-read.csv("C:/Users/acer/Downloads/train2.csv")
+test<-read.csv("C:/Users/acer/Downloads/test2.csv")
+testID<-test
+
+```
+
+Проверяем данные на NA
+```{r results='hide', warning=FALSE}
+sapply(train, function(x){sum(is.na(x))})
+sapply(test, function(x){sum(is.na(x))})
+
+##Приводим к общему типу переменные
+
+train<- train %>% mutate_if(is.factor, as.numeric)
+train <- train %>% mutate_if(is.integer, as.numeric)
+test <- test %>% mutate_if(is.factor, as.numeric)
+test <- test %>% mutate_if(is.integer, as.numeric)
+
+```
+
+Строим модели: 
+```{r results='hide' ,warning=FALSE}
+# Линейная Регрессия
+train$dropoff_datetime <- NULL
+model<- lm(trip_duration ~ ., train)
+train1 <- sample_n(train, 4000)
+shapiro.test(train1$trip_duration)
+
+#for(i in 1:ncol(train)){
+ # for(k in 1:nrow(train)){
+  #  if(is.numeric(train[[i]][k]) && abs(train[[i]][k])>0){
+   #   train[[i]][k]<-log(abs(train[[i]][k]))
+   #}
+ #}
+#}
+#shapiro.test(train1$trip_duration)
+step(model,direction = "backward")
+model<-lm(formula = trip_duration ~ vendor_id + pickup_datetime  + 
+    passenger_count + pickup_longitude + pickup_latitude + dropoff_longitude + 
+    dropoff_latitude + store_and_fwd_flag, data = train)
+predicted <- predict(model, test)
+
+dataFrame <- cbind(id = as.character(testID$id), trip_duration = predicted)
+write.csv(dataFrame, "Taxi.csv", quote = F, row.names = F)
+
+RMSE(train$trip_duration,predicted)
+
+
+
+
+# Случайный Лес
+train1 <- sample_n(train, 15000)
+model <- randomForest(trip_duration ~ .,train1,type = "regression",ntree = 400,
+  do.trace = TRUE)
+
+predicted <- predict(model, test)
+
+dataFrame <- cbind(id = as.character(testID$id), trip_duration = predicted)
+write.csv(dataFrame, "TaxiRF.csv", quote = F, row.names = F)
+
+
+# XGBoost
+# Делим данные для обучения и тестирования
+tr <- createDataPartition(train$id, p = 0.7, list = FALSE)
+
+trainT <- train[tr, ]
+trainTest <- train[-tr, ]
+
+
+train_matrix <- data.matrix(select(trainT, -trip_duration))
+test_matrix <- data.matrix(select(trainTest, -trip_duration))
+
+
+labelTrain <- trainT$trip_duration
+labelTest <- trainTest$trip_duration
+
+#Собираем матрицу
+mat_train <- xgb.DMatrix(data = train_matrix, label = labelTrain)
+mat_test <- xgb.DMatrix(data = test_matrix, label = labelTest)
+
+
+watchlist <- list(train = mat_train, test = mat_test)
+
+#Даем дополнительные парамметры
+params <- list(
+  booster = "gbtree", 
+  objective = "reg:linear", 
+  eta = 0.3,
+  gamma = 0, 
+  max_depth = 6, 
+  min_child_weight = 1, 
+  subsample = 1, 
+  colsample_bytree = 1
+)
+
+# кросс валидация
+xgbcv <- xgb.cv(
+  params = params, 
+  data = mat_train, 
+  nrounds = 100, 
+  nfold = 5, 
+  showsd = T, 
+  stratified = T, 
+  early_stop_round = 10, 
+  maximize = F
+)
+
+bst <- xgb.train(
+  params = params, 
+  data = mat_train, 
+  nrounds = 500, 
+  watchlist = watchlist,
+  early_stopping_rounds = 10,
+  maximize = F , 
+  eval_metric = "rmse"
+)
+
+
+testMatrix <- data.matrix(test)
+
+predicted <- predict(bst, testMatrix)
+
+dataFrame <- cbind(id = as.character(testID$id), trip_duration = predicted)
+write.csv(dataFrame, "XgbTaxi.csv", quote = F, row.names = F)
+
+```
